@@ -23,7 +23,8 @@ export class CodeExecutor {
     functionName: string,
     argsWithTypes: Array<{value: string, type: string}>, // 修改：接收原始字符串
     isAsync: boolean,
-    testArgs?: string // 新增：高阶函数测试参数
+    testArgs?: string, // 新增：高阶函数测试参数
+    isClass?: boolean // 新增：是否是类
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
 
@@ -135,16 +136,23 @@ export class CodeExecutor {
           // ============ 步骤2：执行目标函数 ============
           let result;
           
+          // 判断是否是类（需要使用 new 关键字）
+          const isClassConstructor = ${isClass || false};
+          
           // 如果函数使用剩余参数且第一个参数是数组，则展开数组
           if (hasRestParams && parsedArgs.length === 1 && Array.isArray(parsedArgs[0])) {
             console.log('[沙箱执行] 检测到剩余参数，展开数组传递');
-            if (${isAsync}) {
+            if (isClassConstructor) {
+              result = new ${functionName}(...parsedArgs[0]);
+            } else if (${isAsync}) {
               result = await ${functionName}(...parsedArgs[0]);
             } else {
               result = ${functionName}(...parsedArgs[0]);
             }
           } else {
-            if (${isAsync}) {
+            if (isClassConstructor) {
+              result = new ${functionName}(...parsedArgs);
+            } else if (${isAsync}) {
               result = await ${functionName}(...parsedArgs);
             } else {
               result = ${functionName}(...parsedArgs);

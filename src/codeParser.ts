@@ -20,6 +20,8 @@ export interface FunctionInfo {
   endLine: number;
   fullText: string;
   isAsync: boolean;
+  isClass?: boolean; // 是否是类（构造函数）
+  className?: string; // 所属类名（如果是类方法）
 }
 
 /**
@@ -53,6 +55,26 @@ export class CodeParser {
               if (funcInfo) {
                 functions.push(funcInfo);
               }
+            }
+          }
+        });
+      }
+      // 处理类声明
+      else if (ts.isClassDeclaration(node) && node.name) {
+        const className = node.name.getText(sourceFile);
+        
+        // 提取类本身（作为构造函数）
+        const classInfo = this.extractClassInfo(node, className, sourceFile);
+        if (classInfo) {
+          functions.push(classInfo);
+        }
+        
+        // 提取类的方法
+        node.members.forEach(member => {
+          if (ts.isMethodDeclaration(member) && member.name) {
+            const methodInfo = this.extractMethodInfo(member, className, sourceFile);
+            if (methodInfo) {
+              functions.push(methodInfo);
             }
           }
         });
@@ -148,5 +170,72 @@ export class CodeParser {
    */
   public extractFunctionBody(functionInfo: FunctionInfo): string {
     return functionInfo.fullText;
+  }
+
+  /**
+   * 从类声明中提取信息（将类作为构造函数）
+   */
+  private extractClassInfo(
+    node: ts.ClassDeclaration,
+    className: string,
+    sourceFile: ts.SourceFile
+  ): FunctionInfo | null {
+    // 找到构造函数
+    const constructor = node.members.find(m => ts.isConstructorDeclaration(m)) as ts.ConstructorDeclaration | undefined;
+    
+    const parameters = constructor ? constructor.parameters.map(param => {
+      const name = param.name.getText(sourceFile);
+      const type = param.type ? param.type.getText(sourceFile) : 'any';
+      const optional = param.questionToken !== undefined;
+      return { name, type, optional };
+    }) : [];
+
+    const { line: startLine } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+    const { line: endLine } = sourceFile.getLineAndCharacterOfPosition(node.getEnd());
+    const fullText = node.getText(sourceFile);
+
+    return {
+      name: className,
+      parameters,
+      returnType: className,
+      startLine: startLine + 1,
+      endLine: endLine + 1,
+      fullText,
+      isAsync: false,
+      isClass: true
+    };
+  }
+
+  /**
+   * 从类方法中提取信息
+   */
+  private extractMethodInfo(
+    node: ts.MethodDeclaration,
+    className: string,
+    sourceFile: ts.SourceFile
+  ): FunctionInfo | null {
+    const name = node.name.getText(sourceFile);
+    const parameters = node.parameters.map(param => {
+      const paramName = param.name.getText(sourceFile);
+      const type = param.type ? param.type.getText(sourceFile) : 'any';
+      const optional = param.questionToken !== undefined;
+      return { name: paramName, type, optional };
+    });
+    const returnType = node.type ? node.type.getText(sourceFile) : 'any';
+    const { line: startLine } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+    const { line: endLine } = sourceFile.getLineAndCharacterOfPosition(node.getEnd());
+    const fullText = node.getText(sourceFile);
+    const isAsync = node.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword) || false;
+
+    return {
+      name: `${className}.${name}`,
+      parameters,
+      returnType,
+      startLine: startLine + 1,
+      endLine: endLine + 1,
+      fullText,
+      isAsync,
+      className
+    };
   }
 }

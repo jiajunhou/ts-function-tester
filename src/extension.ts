@@ -189,13 +189,14 @@ export function activate(context: vscode.ExtensionContext) {
         type: arg.type
       }));
 
-      // 执行函数（传递 testArgs）
+      // 执行函数（传递 testArgs 和 isClass）
       const result = await codeExecutor.executeFunction(
         functionInfo.fullText,
         functionName,
         argsWithTypes,
         functionInfo.isAsync,
-        testArgs // 传递测试参数
+        testArgs, // 传递测试参数
+        functionInfo.isClass // 传递是否是类
       );
 
       // 添加 index 到结果中

@@ -393,6 +393,7 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
     let functions = [];
     const functionHistory = {};
     const MAX_HISTORY_PER_FUNC = 3;
+    const classInstances = {}; // 保存类实例 {className: instance}
     
     const state = vscode.getState() || {};
     const paramCache = state.paramCache || {};
@@ -429,16 +430,41 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
       }
 
       console.log('[前端] 开始渲染函数列表...');
-      listEl.innerHTML = funcs.map((func, index) => {
+      
+      // 分组：类和普通函数
+      const classes = {}; // {className: {class: classInfo, methods: [methodInfo]}}
+      const regularFunctions = [];
+      
+      funcs.forEach(func => {
+        if (func.isClass) {
+          // 类本身
+          classes[func.name] = { class: func, methods: [] };
+        } else if (func.className) {
+          // 类方法
+          if (!classes[func.className]) {
+            classes[func.className] = { class: null, methods: [] };
+          }
+          classes[func.className].methods.push(func);
+        } else {
+          // 普通函数
+          regularFunctions.push(func);
+        }
+      });
+      
+      let html = '';
+      let index = 0;
+      
+      // 渲染普通函数
+      regularFunctions.forEach(func => {
         const params = func.parameters.map(p => 
           p.name + (p.optional ? '?' : '') + ': ' + p.type
         ).join(', ');
         
-        return '<li class="function-item" data-index="' + index + '">' +
+        html += '<li class="function-item" data-index="' + index + '">' +
           '<div class="function-header">' +
           '<span class="expand-icon">▶</span>' +
           '<div class="function-info">' +
-          '<div class="function-name">' + func.name + '</div>' +
+          '<div class="function-name">func: ' + func.name + '</div>' +
           '<div class="function-signature">(' + params + ') => ' + func.returnType + (func.isAsync ? ' [async]' : '') + '</div>' +
           '</div>' +
           '</div>' +
@@ -456,13 +482,105 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
           '</div>' +
           '</div>' +
           '</li>';
-      }).join('');
+        index++;
+      });
+      
+      // 渲染类
+      Object.keys(classes).forEach(className => {
+        const classData = classes[className];
+        const classInfo = classData.class;
+        
+        if (!classInfo) return; // 没有类定义，只有方法（理论上不应该发生）
+        
+        // 类头部
+        html += '<li class="function-item class-item" data-index="' + index + '">' +
+          '<div class="function-header">' +
+          '<span class="expand-icon">▶</span>' +
+          '<div class="function-info">' +
+          '<div class="function-name">class: ' + className + '</div>' +
+          '</div>' +
+          '</div>' +
+          '<div class="test-panel">';
+        
+        // 构造函数
+        const constructorParams = classInfo.parameters.map(p => 
+          p.name + (p.optional ? '?' : '') + ': ' + p.type
+        ).join(', ');
+        
+        html += '<div style="margin-bottom: 12px; padding-left: 16px;">' +
+          '<div style="font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;">constructor(' + constructorParams + ')</div>' +
+          '<div class="param-inputs" data-index="' + index + '"></div>' +
+          '<div class="history-list" data-index="' + index + '" style="margin-bottom: 8px;"></div>' +
+          '<div class="button-group">' +
+          '<button class="execute-btn" data-index="' + index + '">创建实例</button>' +
+          '<button class="secondary clear-btn" data-index="' + index + '">清空</button>' +
+          '</div>' +
+          '<div class="result-panel" data-index="' + index + '">' +
+          '<span class="result-label">Output:</span>' +
+          '<div class="result-output"></div>' +
+          '<div class="execution-time"></div>' +
+          '</div>' +
+          '</div>';
+        
+        index++;
+        
+        // 类方法
+        classData.methods.forEach(method => {
+          const methodName = method.name.split('.')[1]; // 去掉 "User." 前缀
+          const methodParams = method.parameters.map(p => 
+            p.name + (p.optional ? '?' : '') + ': ' + p.type
+          ).join(', ');
+          
+          html += '<div class="method-wrapper" style="margin-bottom: 12px; padding-left: 16px; border-left: 2px solid var(--vscode-panel-border);">' +
+            '<div class="method-name" style="font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; cursor: pointer;" data-method-index="' + index + '">' +
+            methodName + '(' + methodParams + ') => ' + method.returnType +
+            '</div>' +
+            '<div class="param-inputs" data-index="' + index + '" style="display: none;"></div>' +
+            '<div class="history-list" data-index="' + index + '" style="margin-bottom: 8px; display: none;"></div>' +
+            '<div class="button-group" style="display: none;">' +
+            '<button class="execute-btn method-execute-btn" data-index="' + index + '">执行</button>' +
+            '<button class="secondary clear-btn" data-index="' + index + '">清空</button>' +
+            '</div>' +
+            '<div class="result-panel" data-index="' + index + '" style="display: none;">' +
+            '<span class="result-label">Output:</span>' +
+            '<div class="result-output"></div>' +
+            '<div class="execution-time"></div>' +
+            '</div>' +
+            '</div>';
+          
+          index++;
+        });
+        
+        html += '</div></li>';
+      });
+      
+      listEl.innerHTML = html;
 
       listEl.querySelectorAll('.function-header').forEach((header) => {
         header.addEventListener('click', (e) => {
           const item = e.currentTarget.closest('.function-item');
           const index = parseInt(item.dataset.index);
-          toggleFunction(index, item);
+          const isExpanded = item.classList.contains('expanded');
+          
+          // 关闭所有已展开的项
+          document.querySelectorAll('.function-item.expanded').forEach(i => {
+            i.classList.remove('expanded');
+          });
+          
+          if (!isExpanded) {
+            item.classList.add('expanded');
+            currentFunction = functions[index];
+            
+            // 渲染参数输入框
+            const container = item.querySelector('.test-panel > .param-inputs');
+            if (container && currentFunction.parameters) {
+              console.log('[前端] 渲染参数:', currentFunction.name, currentFunction.parameters.length);
+              renderParams(container, currentFunction.parameters, currentFunction.name);
+            }
+            renderFunctionHistory(index);
+          } else {
+            currentFunction = null;
+          }
         });
       });
 
@@ -496,6 +614,35 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
           });
         });
       });
+      
+      // 添加类方法点击事件
+      listEl.querySelectorAll('.method-name').forEach((methodEl) => {
+        methodEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const methodIndex = parseInt(methodEl.dataset.methodIndex);
+          const wrapper = methodEl.closest('.method-wrapper');
+          const func = functions[methodIndex];
+          
+          // 切换展开/收起
+          const container = wrapper.querySelector('.param-inputs');
+          const buttonGroup = wrapper.querySelector('.button-group');
+          const resultPanel = wrapper.querySelector('.result-panel');
+          
+          if (container.style.display === 'none') {
+            // 展开：渲染参数输入框
+            container.style.display = 'block';
+            buttonGroup.style.display = 'flex';
+            renderParams(container, func.parameters, func.name);
+            currentFunction = func;
+          } else {
+            // 收起
+            container.style.display = 'none';
+            buttonGroup.style.display = 'none';
+            resultPanel.style.display = 'none';
+            currentFunction = null;
+          }
+        });
+      });
     }
 
     function toggleFunction(index, item) {
@@ -527,7 +674,13 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function renderParamInputs(index, params) {
-      const container = document.querySelector('.param-inputs[data-index="' + index + '"]');
+      const item = document.querySelector('.function-item[data-index="' + index + '"]');
+      if (!item) return;
+      
+      // 在 item 内部查找 param-inputs 容器
+      const container = item.querySelector('.param-inputs[data-index="' + index + '"]');
+      if (!container) return;
+      
       const func = functions[index];
       
       if (params.length === 0) {
@@ -561,11 +714,96 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
       }, 0);
     }
 
+    // 直接渲染参数到指定容器
+    function renderParams(container, params, functionName) {
+      if (!params || params.length === 0) {
+        container.innerHTML = '<p style="color: var(--vscode-descriptionForeground); font-size: 12px; margin-bottom: 8px;">无参数</p>';
+        return;
+      }
+
+      let html = params.map(param => {
+        const cachedValue = getCachedParam(functionName, param.name);
+        
+        // 检测是否是函数类型参数
+        const isFunctionType = param.type.includes('=>') || param.type.includes('Function') || /^[A-Z]/.test(param.type);
+        const placeholder = isFunctionType 
+          ? '例：(a, b) => a + b'
+          : param.type;
+        
+        // 为函数类型生成示例
+        let exampleBtn = '';
+        if (isFunctionType && param.type.includes('number')) {
+          exampleBtn = '<button class="example-btn" data-param="' + param.name + '" data-example="(a, b, c) => a + b + c" style="margin-top: 4px; padding: 2px 8px; font-size: 11px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; border-radius: 3px; cursor: pointer;">填充示例函数</button>';
+        } else if (isFunctionType) {
+          exampleBtn = '<button class="example-btn" data-param="' + param.name + '" data-example="(x) => x * 2" style="margin-top: 4px; padding: 2px 8px; font-size: 11px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; border-radius: 3px; cursor: pointer;">填充示例函数</button>';
+        }
+        
+        return '<div class="param-group">' +
+          '<label class="param-label">' +
+          param.name + ' <span class="param-type">' + param.type + '</span>' +
+          (isFunctionType ? ' <span style="color: #858585; font-size: 10px;">← 输入函数</span>' : '') +
+          '</label>' +
+          '<textarea class="param-input" data-param="' + param.name + '" data-type="' + param.type + '" ' +
+          'placeholder="' + placeholder + '" rows="' + (isFunctionType ? '2' : '1') + '" ' +
+          'style="resize: vertical; min-height: ' + (isFunctionType ? '48px' : '32px') + '; font-family: var(--vscode-editor-font-family);">' +
+          cachedValue + '</textarea>' +
+          exampleBtn +
+          '</div>';
+      }).join('');
+      
+      container.innerHTML = html;
+      
+      setTimeout(() => {
+        const inputs = container.querySelectorAll('.param-input');
+        inputs.forEach(input => {
+          input.addEventListener('input', (e) => {
+            const paramName = e.target.dataset.param;
+            saveParamCache(functionName, paramName, e.target.value);
+          });
+        });
+        
+        // 添加示例按钮的点击事件
+        const exampleBtns = container.querySelectorAll('.example-btn');
+        exampleBtns.forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const paramName = btn.dataset.param;
+            const example = btn.dataset.example;
+            const input = container.querySelector('.param-input[data-param="' + paramName + '"]');
+            if (input) {
+              input.value = example;
+              saveParamCache(functionName, paramName, example);
+            }
+          });
+        });
+      }, 0);
+    }
+
     function executeFunction(index) {
       if (!currentFunction) return;
 
-      const item = document.querySelector('.function-item[data-index="' + index + '"]');
-      const inputs = item.querySelectorAll('.param-input');
+      // 对于类方法，从 method-wrapper 查找元素
+      let item, inputs, panel, output;
+      
+      const func = functions[index];
+      if (func.className && !func.isClass) {
+        // 类方法：查找 method-wrapper
+        const methodName = document.querySelector('.method-name[data-method-index="' + index + '"]');
+        if (!methodName) return;
+        const wrapper = methodName.closest('.method-wrapper');
+        if (!wrapper) return;
+        
+        inputs = wrapper.querySelectorAll('.param-input');
+        panel = wrapper.querySelector('.result-panel');
+        output = panel.querySelector('.result-output');
+      } else {
+        // 普通函数或类构造函数
+        item = document.querySelector('.function-item[data-index="' + index + '"]');
+        if (!item) return;
+        inputs = item.querySelectorAll('.param-input');
+        panel = item.querySelector('.result-panel');
+        output = panel.querySelector('.result-output');
+      }
       
       inputs.forEach(input => {
         input.classList.remove('error');
@@ -596,8 +834,19 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
       
       if (hasError) return;
       
-      const panel = item.querySelector('.result-panel');
-      const output = panel.querySelector('.result-output');
+      // 检查是否是类方法
+      if (func.className && !func.isClass) {
+        // 这是类方法，检查实例是否存在
+        const instance = classInstances[func.className];
+        if (!instance) {
+          panel.style.display = 'block';
+          output.textContent = '错误：请先创建 ' + func.className + ' 的实例';
+          output.style.color = '#f48771';
+          return;
+        }
+      }
+      
+      panel.style.display = 'block';
       panel.classList.add('show');
       output.innerHTML = '<div class="result-loading"></div><span>执行中...</span>';
       output.style.color = 'var(--vscode-foreground)';
@@ -612,13 +861,18 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
         type: 'executeFunction',
         functionName: currentFunction.name,
         arguments: args,
-        index: index
+        index: index,
+        isMethod: func.className && !func.isClass, // 标记是否是类方法
+        className: func.className, // 传递类名
+        instance: func.className && !func.isClass ? classInstances[func.className] : undefined // 传递实例
       });
       
       console.log('发送执行请求:', {
         functionName: currentFunction.name,
         args: args,
-        index: index
+        index: index,
+        isMethod: func.className && !func.isClass,
+        className: func.className
       });
     }
 
@@ -633,18 +887,42 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
 
     function showResult(result) {
       const index = result.index || 0;
-      const item = document.querySelector('.function-item[data-index="' + index + '"]');
-      if (!item) return;
+      const func = functions[index];
+      
+      let panel, output, time;
+      
+      if (func && func.className && !func.isClass) {
+        // 类方法：查找 method-wrapper
+        const methodName = document.querySelector('.method-name[data-method-index="' + index + '"]');
+        if (!methodName) return;
+        const wrapper = methodName.closest('.method-wrapper');
+        if (!wrapper) return;
+        
+        panel = wrapper.querySelector('.result-panel');
+        output = panel.querySelector('.result-output');
+        time = panel.querySelector('.execution-time');
+      } else {
+        // 普通函数或类构造函数
+        const item = document.querySelector('.function-item[data-index="' + index + '"]');
+        if (!item) return;
+        
+        panel = item.querySelector('.result-panel');
+        output = panel.querySelector('.result-output');
+        time = panel.querySelector('.execution-time');
+      }
 
-      const panel = item.querySelector('.result-panel');
-      const output = panel.querySelector('.result-output');
-      const time = panel.querySelector('.execution-time');
-
+      panel.style.display = 'block';
       panel.classList.add('show');
       
       if (result.success) {
         output.innerHTML = formatResult(result.result);
         output.style.color = 'var(--vscode-foreground)';
+        
+        // 如果是类构造函数，保存实例
+        if (func && func.isClass && result.result) {
+          classInstances[func.name] = result.result;
+          console.log('[前端] 保存类实例:', func.name, result.result);
+        }
       } else {
         output.textContent = result.error;
         output.style.color = '#f48771';
@@ -802,21 +1080,29 @@ export class TestPanelProvider implements vscode.WebviewViewProvider {
       const item = document.querySelector('.function-item[data-index="' + funcIndex + '"]');
       if (!item) return;
 
+      // 确保展开
       if (!item.classList.contains('expanded')) {
         item.classList.add('expanded');
         currentFunction = func;
-        renderParamInputs(funcIndex, func.parameters);
+        
+        const container = item.querySelector('.test-panel > .param-inputs');
+        if (container) {
+          renderParams(container, func.parameters, func.name);
+        }
       }
 
+      // 增加等待时间，确保输入框完全渲染
       setTimeout(() => {
         const inputs = item.querySelectorAll('.param-input');
+        console.log('[前端] 回填历史记录:', func.name, '输入框数量:', inputs.length, '参数数量:', record.args.length);
         
         record.args.forEach((arg, i) => {
           if (inputs[i]) {
             inputs[i].value = arg.value;
+            console.log('[前端] 回填参数', i, ':', arg.value);
           }
         });
-      }, 50);
+      }, 100);
     }
   </script>
 </body>
